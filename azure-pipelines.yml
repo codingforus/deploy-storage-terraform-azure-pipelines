@@ -1,0 +1,60 @@
+trigger: none
+
+variables:
+  - name: RESOURCE_GROUP_NAME
+    value: tfstaterg
+  - name: STORAGE_ACCOUNT_NAME
+    value: tfstatesatraining
+  - name: CONTAINER_NAME
+    value: tfstateblobdemo
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+- task: AzureCLI@2
+  displayName: TF remote state storage account
+  inputs:
+    azureSubscription: 'test-automatic'
+    scriptType: 'pscore'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      # Create resource group
+      az group create --name $(RESOURCE_GROUP_NAME) --location westeurope
+      
+      # Create storage account
+      az storage account create `
+        --resource-group $(RESOURCE_GROUP_NAME) `
+        --name $(STORAGE_ACCOUNT_NAME) `
+        --sku Standard_LRS `
+        --allow-blob-public-access false
+      
+      # Create blob container
+      az storage container create --name $(CONTAINER_NAME) --account-name $(STORAGE_ACCOUNT_NAME)
+
+      $ACCOUNT_KEY=$(az storage account keys list `
+        --resource-group $(RESOURCE_GROUP_NAME) `
+        --account-name $(STORAGE_ACCOUNT_NAME) `
+        --query '[0].value' -o tsv)
+
+      Write-Host "##vso[task.setvariable variable=ARM_ACCESS_KEY;]$ACCOUNT_KEY"
+
+- task: AzureCLI@2
+  displayName: Terraform deploy az resources
+  inputs:
+    azureSubscription: 'test-automatic'
+    scriptType: 'pscore'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      terraform init `
+        -backend-config="resource_group_name=$(RESOURCE_GROUP_NAME)" `
+        -backend-config="storage_account_name=$(STORAGE_ACCOUNT_NAME)" `
+        -backend-config="container_name=$(CONTAINER_NAME)" `
+        -backend-config="key=$(ARM_ACCESS_KEY)"
+
+      terraform plan -input=false -out=tfplan
+      
+      terraform apply -auto-approve tfplan
+      
+      terraform destroy -auto-approve
+    workingDirectory: $(System.DefaultWorkingDirectory)/terraform
